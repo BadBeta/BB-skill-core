@@ -1,0 +1,45 @@
+{
+  "_comment": "Per-language AI-slop pattern catalog. See anti-slop-scan.py. Hand-edit safe.",
+  "_severity": {
+    "block": "Should be fixed before the author stops. Hook injects a strong reminder.",
+    "warn": "Likely slop but has legitimate uses. Hook injects a gentle reminder."
+  },
+  "universal": {
+    "extensions": [
+      ".rs",
+      ".ex",
+      ".exs",
+      ".c",
+      ".h",
+      ".py",
+      ".ts",
+      ".js",
+      ".go"
+    ],
+    "checks": [
+      {
+        "id": "planning-citation-in-source",
+        "cite": "<lang>-planning (plan-document hygiene) / <lang>-reviewing (citations-in-source anti-pattern)",
+        "severity": "warn",
+        "regex": "(PLAN\\.md|TDD'd|(?:rust|elixir|c)-(?:planning|implementing|reviewing)\\s*\u00a7|skill-section\\s*\u00a7)",
+        "skip_if_path_matches": "/\\.claude/hooks/|/\\.claude/skills/|/skill_hooks_mechanics/|/(?:rust|elixir)-phase-skills/",
+        "message": "Citation to a planning / skill document found in source code. Citations rot the first time the document renumbers. Move to the design doc (PLAN.md / ARCHITECTURE.md) \u2014 source describes current invariants, not the process that produced them."
+      },
+      {
+        "id": "impossible-state-comment",
+        "cite": "review anti-pattern: defensive code for impossible states",
+        "severity": "warn",
+        "regex": "(?i)(//|#|--).*\\b(this\\s+(?:can['`]?t|cannot|shouldn['`]?t|should\\s+not|will\\s+never|won['`]?t|never)\\s+(?:happen|occur|be\\s+reached)|never\\s+reached|should\\s+never\\s+happen|impossible\\s+case)",
+        "message": "Comment admitting a branch is impossible usually sits next to a defensive fallback that hides bugs. Either prove the branch unreachable with the type system (narrow the enum, split the type), or use `unreachable!()`/`raise`/equivalent with a diagnostic. A silent fallback on an 'impossible' path means garbage data the first time it becomes reachable."
+      },
+      {
+        "id": "unverified-crypto-golden-value",
+        "cite": "MicroBEAM M4 retrospective \u2014 wrong-MD5-asserted-and-test-still-passed",
+        "severity": "warn",
+        "regex": "(?:0x[0-9a-fA-F]{2}\\s*,\\s*){15,}0x[0-9a-fA-F]{2}",
+        "requires_missing_in_file": "(?:md5sum|shasum|sha256sum|xxd|openssl\\s+dgst|RFC\\s*\\d+|test\\s+vector|hand-verified|verified\\s+against)",
+        "message": "A 16+-byte hex array literal looks like a crypto/hash golden value. If it is, the test asserts your *assumption* \u2014 a wrong literal still produces a passing test. Verify it against an external reference (`md5sum`, `shasum`, `xxd`, RFC test vectors) and leave a one-line comment naming the source. The hook stays quiet once the file mentions `md5sum` / `shasum` / `xxd` / `RFC NNNN` / `test vector` / `hand-verified` near the literal."
+      }
+    ]
+  }
+}
