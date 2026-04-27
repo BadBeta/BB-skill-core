@@ -33,14 +33,19 @@ All three install into `~/.claude/` (override with `CLAUDE_HOME=/some/path`).
 │   ├── bb-anti-slop-patterns.d/         ← drop-in directory
 │   │   ├── rust.json                    ← from rust-phase-skills
 │   │   └── elixir.json                  ← from elixir-phase-skills
-│   ├── bb-skill-enforcement.py          ← core: [use-skills] marker, recent-window
+│   ├── bb-skill-enforcement.py          ← core: [use-skills] marker, recent-window, Bash orientation exemption
 │   ├── bb-skill-triggers.json           ← core: language-independent keywords
 │   ├── bb-skill-triggers.d/             ← drop-in directory
 │   │   ├── rust.json                    ← from rust-phase-skills
 │   │   └── elixir.json                  ← from elixir-phase-skills
-│   ├── bb-tdd-state-hook.py             ← core: TDD gate
+│   ├── bb-tdd-state-hook.py             ← core: TDD gate ([TDD] marker, refactor-exempt)
 │   ├── bb-stop-review-check.py          ← core: review-on-Stop reminder
-│   ├── bb-milestone-commit-check.py     ← core: long-running-project guard
+│   ├── bb-milestone-commit-check.py     ← core: M-commit guard
+│   ├── bb-milestone-skill-report.py     ← core: blocks edits until milestone_skill_report.md exists
+│   ├── bb-post-generator-scan.py        ← core: scans new project after mix phx.new / cargo new
+│   ├── bb-post-generator-patterns.d/    ← drop-in directory
+│   │   ├── rust.json                    ← from rust-phase-skills
+│   │   └── elixir.json                  ← from elixir-phase-skills
 │   ├── bb-sweep-rationale-markers.sh    ← core: pre-commit §§ stripper
 │   ├── bb-rationale-marker-rust.py      ← from rust-phase-skills
 │   ├── bb-no-std-build-check.py         ← from rust-phase-skills
@@ -100,12 +105,14 @@ jq .hooks ~/.claude/settings.json
 
 | Hook | Event | What fires it |
 |---|---|---|
-| `bb-skill-enforcement.py` | UserPromptSubmit, PreToolUse | Every prompt; every non-exempt tool call. Detects `[use-skills]` marker, scans triggers, gates non-exempt tools until a Skill is invoked. |
-| `bb-anti-slop-scan.py` | PostToolUse (Edit/Write/NotebookEdit) | Every file edit. Runs the union of pattern groups whose `extensions` match the path. |
+| `bb-skill-enforcement.py` | UserPromptSubmit, PreToolUse | Every prompt; every non-exempt tool call. Detects `[use-skills]` marker, scans triggers, gates non-exempt tools until a Skill is invoked. **Read-only Bash commands (`ls`, `pwd`, `git status/log/diff/show/branch`, `find`, `cat`, `head`, etc.) are exempt** — enforcement is for mutation, not orientation. |
+| `bb-anti-slop-scan.py` | PostToolUse (Edit/Write/NotebookEdit) | Every file edit. Runs the union of pattern groups whose `extensions` match the path. **Per-session dedupe**: same `(check_id, file_path)` fires at most once per session — stops the "same warning hammered N times" failure mode. |
 | `bb-tdd-state-hook.py` | PostToolUse (Edit/Write/NotebookEdit) | **Default silent.** Activates when `[TDD]` appears in a recent prompt; emits a forceful full reminder on every fire. Refactor-exempt (see §1.5). |
+| `bb-milestone-skill-report.py` | PreToolUse (Edit/Write/NotebookEdit) | **Blocks** edits to project files when `PLAN.md` has an active M-milestone but `milestone_skill_report.md` lacks an entry for it. See §9. |
+| `bb-post-generator-scan.py` | PostToolUse (Bash) | One-shot after `mix phx.new` / `mix igniter.new` / `cargo new` / `cargo init` / `cargo generate`. Scans the new project against the catalog under `bb-post-generator-patterns.d/`. See §1.6. |
 | `bb-rationale-marker-{rust,elixir}.py` | PostToolUse (Edit/Write/NotebookEdit) | Edits to `.rs` / `.ex` / `.exs`. Reminds about `// §§` rationale markers. |
 | `bb-no-std-build-check.py` | PostToolUse (Edit/Write/NotebookEdit) | Edits to `.rs` files in a `no_std` crate. Re-runs the build. |
-| `bb-milestone-commit-check.py` | PreToolUse (Bash) | Bash commands. Specifically guards against premature `M\d+:` milestone commits. |
+| `bb-milestone-commit-check.py` | PreToolUse (Bash) | Bash commands. Guards against premature `M\d+:` milestone commits (PLAN.md must mark the milestone DONE first). |
 | `bb-stop-review-check.py` | Stop | Session end. Reminds to review changes / sync source. |
 
 ### 1.5 TDD enforcement — the `[TDD]` marker
@@ -150,6 +157,59 @@ export BB_TDD_RECENT_WINDOW=5    # marker only counts if in last 5 user prompts
 export BB_TDD_RECENT_WINDOW=1    # marker must be in the most recent prompt
 export BB_TDD_RECENT_WINDOW=0    # default: whole session
 ```
+
+### 1.6 Post-generator scanner
+
+`bb-post-generator-scan.py` is a one-shot PostToolUse hook that fires
+after a recognised project generator completes successfully:
+
+| Generator command | Project root |
+|---|---|
+| `mix phx.new <name>` | `<cwd>/<name>` |
+| `mix igniter.new <name>` | `<cwd>/<name>` |
+| `cargo new <name>` | `<cwd>/<name>` |
+| `cargo init` | `<cwd>` |
+| `cargo generate ...` | `<cwd>` |
+
+The hook walks the new project against the union of catalog fragments
+under `bb-post-generator-patterns.d/*.json`. Each fragment is a list
+of checks:
+
+```json
+{
+  "checks": [
+    {
+      "id": "phx-runtime-port-unguarded",
+      "file_glob": "config/runtime.exs",
+      "regex": "^\\s*config\\s+:[a-z_]+,\\s+\\w+Web\\.Endpoint,",
+      "skip_if_in_file": "System\\.get_env\\(\"PORT\"\\)",
+      "cite": "phoenix §Configuration Precedence",
+      "severity": "warn",
+      "message": "..."
+    }
+  ]
+}
+```
+
+`file_glob` supports `**` for recursive match. `skip_if_in_file`
+silences the check if the regex matches anywhere in the file. Same
+shape as `bb-anti-slop-patterns.d/` checks, simpler superset.
+
+The point: catch generator output bugs at the **moment of generation**,
+while the LLM still remembers it has not yet read the file. The
+canonical case is the Phoenix `runtime.exs` port-bug — the generator
+ships an unguarded `:port`, the LLM ships it without reading
+`runtime.exs`, and dev-time `:eaddrinuse` then surprises someone.
+This hook surfaces the issue before `mix phx.server` is even started.
+
+To add a check, drop a JSON fragment into the matching pack:
+
+```
+elixir-phase-skills/hooks/bb-post-generator-patterns.d/elixir.json
+rust-phase-skills/hooks/bb-post-generator-patterns.d/rust.json
+```
+
+The hook picks it up next session.
 
 ## 2. Install / uninstall
 
@@ -203,7 +263,9 @@ Use `rust-phase-skills` or `elixir-phase-skills` as the template.
    ├── hooks/
    │   ├── bb-anti-slop-patterns.d/
    │   │   └── my-language.json
-   │   └── bb-skill-triggers.d/
+   │   ├── bb-skill-triggers.d/
+   │   │   └── my-language.json
+   │   └── bb-post-generator-patterns.d/   (optional)
    │       └── my-language.json
    └── my-language-planning/  my-language-implementing/  my-language-reviewing/
    ```
@@ -509,9 +571,14 @@ milestone marker.
 | Need | File |
 |---|---|
 | The language-independent rules and triggers | `BB-skill-core/hooks/bb-anti-slop-patterns.json`, `BB-skill-core/hooks/bb-skill-triggers.json` |
-| Rust/C anti-slop patterns and triggers | `rust-phase-skills/hooks/bb-anti-slop-patterns.d/rust.json`, `rust-phase-skills/hooks/bb-skill-triggers.d/rust.json` |
-| Elixir / Phoenix patterns and triggers | `elixir-phase-skills/hooks/bb-anti-slop-patterns.d/elixir.json`, `elixir-phase-skills/hooks/bb-skill-triggers.d/elixir.json` |
+| Rust/C anti-slop patterns, triggers, post-generator catalog | `rust-phase-skills/hooks/bb-anti-slop-patterns.d/rust.json`, `bb-skill-triggers.d/rust.json`, `bb-post-generator-patterns.d/rust.json` |
+| Elixir / Phoenix patterns, triggers, post-generator catalog | `elixir-phase-skills/hooks/bb-anti-slop-patterns.d/elixir.json`, `bb-skill-triggers.d/elixir.json`, `bb-post-generator-patterns.d/elixir.json` |
+| Bash orientation allowlist | `BB-skill-core/hooks/bb-skill-enforcement.py` (`ORIENTATION_BIN_ALLOWLIST`, `ORIENTATION_GIT_SUBCMDS`) |
+| TDD marker / refactor exemptions | `BB-skill-core/hooks/bb-tdd-state-hook.py` (`TDD_MARKER`, `tdd_marker_active`, `is_refactor_of_known_name`) |
+| Anti-slop dedupe state files | `~/.claude/cache/anti-slop-seen/<session_id>.json` (per-session) |
+| Milestone-skill-report parser | `BB-skill-core/hooks/bb-milestone-skill-report.py` (`active_milestone`, `has_report_entry`) |
+| Post-generator detection / scan | `BB-skill-core/hooks/bb-post-generator-scan.py` (`GENERATORS`, `scan_project`) |
 | The settings merger's algorithm | `BB-skill-core/install/merge_settings.py` |
 | The hook event names + matcher syntax | Existing `settings-fragment.json` files in each pack |
-| Tests | `BB-skill-core/tests/` — 20 tests covering both drop-in mergers and the settings merger |
+| Tests | `BB-skill-core/tests/` — 47 tests across 9 files covering all hook behaviour |
 | Rollback | `~/Projects/skill_hooks_mechanics/` — frozen monolithic snapshot of the pre-split state |
