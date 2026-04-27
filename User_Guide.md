@@ -118,10 +118,12 @@ include the `[TDD]` marker anywhere in your prompt:
 [TDD] add a function that converts hex strings to bytes
 ```
 
-The marker stays active for the next `BB_TDD_RECENT_WINDOW` (default 5)
-user-message turns; after that the hook goes silent again. To turn it
-off explicitly mid-session, use `[no-TDD]` — the most-recent marker
-wins, so `[no-TDD]` in a later prompt overrides an earlier `[TDD]`.
+By default the marker **stays active for the rest of the session** —
+once you put `[TDD]` in any prompt, the gate stays armed until the
+session ends or you explicitly turn it off with `[no-TDD]`. The most-
+recent marker wins, so `[no-TDD]` in a later prompt overrides an
+earlier `[TDD]`. Markers do **not** persist across sessions; a new
+session starts silent.
 
 When active, the hook fires the **full reminder every time** (no fade)
 on edits that introduce a new public function in `IMPL_EXTENSIONS`
@@ -140,10 +142,13 @@ A single inline-fn-name match in either tests or git history is enough
 — if the codebase already knows that name, the edit is treated as a
 refactor and the gate stays quiet.
 
-To raise the activation window or shrink it:
+To narrow activation to a sliding window of recent prompts (off by
+default — sessions are short enough that whole-session activation is
+usually what you want):
 ```bash
-export BB_TDD_RECENT_WINDOW=10   # marker stays active for 10 user turns
-export BB_TDD_RECENT_WINDOW=0    # disable the window (any [TDD] ever in transcript activates)
+export BB_TDD_RECENT_WINDOW=5    # marker only counts if in last 5 user prompts
+export BB_TDD_RECENT_WINDOW=1    # marker must be in the most recent prompt
+export BB_TDD_RECENT_WINDOW=0    # default: whole session
 ```
 
 ## 2. Install / uninstall

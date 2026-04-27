@@ -198,6 +198,26 @@ def test_refactor_exempt_when_name_in_git_history():
         assert mod.handle(ev) is None
 
 
+def test_default_window_is_whole_session():
+    """Default BB_TDD_RECENT_WINDOW=0 → [TDD] from many prompts ago
+    is still active. Confirms the per-session-persistence default."""
+    with tempfile.TemporaryDirectory() as tmp:
+        home = Path(tmp)
+        # Make sure no env override is leaking in from a prior test
+        os.environ.pop("BB_TDD_RECENT_WINDOW", None)
+        _seed_extensions(home)
+        proj = _make_proj(home)
+        impl = proj / "lib" / "thing.ex"
+        impl.write_text("defmodule Thing do\n  def brand_new_xyz(x), do: x\nend\n")
+        # [TDD] is 50 prompts back — well beyond any reasonable window
+        msgs = ["[TDD] turn it on"] + [f"step {i}" for i in range(50)]
+        transcript = _make_transcript(home, msgs)
+        ev = _make_event(impl, "  def brand_new_xyz(x), do: x", transcript)
+        mod = _load_with_home(home)
+        msg = mod.handle(ev)
+        assert msg is not None, "[TDD] should still be active 50 prompts later by default"
+
+
 def test_truly_new_fn_fires_under_marker():
     """Active [TDD], name is novel (not in tests, not in git) → fires."""
     with tempfile.TemporaryDirectory() as tmp:

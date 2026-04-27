@@ -179,7 +179,11 @@ NEW_PUBLIC_FN_NAME_PATTERNS = {
 # get false-positive nagged.
 TDD_MARKER = "[TDD]"
 NO_TDD_MARKER = "[no-TDD]"
-TDD_RECENT_WINDOW = max(0, int(os.environ.get("BB_TDD_RECENT_WINDOW", "5")))
+# Default 0 = no window. Any [TDD] anywhere in the current session's
+# transcript activates the gate; only [no-TDD] in a later prompt
+# cancels it. Set BB_TDD_RECENT_WINDOW to a positive integer to limit
+# activation to the last N user prompts.
+TDD_RECENT_WINDOW = max(0, int(os.environ.get("BB_TDD_RECENT_WINDOW", "0")))
 
 # Test-file directories scanned by the refactor-exemption check.
 TEST_DIR_NAMES = ("test", "tests", "spec")
