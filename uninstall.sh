@@ -40,6 +40,8 @@ if [ "${#detected[@]}" -gt 0 ]; then
     exit 2
 fi
 
+rm -f "${HOOKS_DIR}/bb-skill-triggers.d/third-party-skills.json"
+
 CORE_FILES=(
     bb-anti-slop-scan.py
     bb-anti-slop-patterns.json

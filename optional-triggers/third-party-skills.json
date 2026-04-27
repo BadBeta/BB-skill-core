@@ -1,0 +1,195 @@
+{
+  "_about": "Opt-in third-party skill triggers. Maps prompt keywords to standalone skills NOT shipped by BB-skill-core or any of the language packs (e.g. mermaid, ARM_assembly, c-programming, opencl, jetson-agx-orin, ...). Install only if you have those skills somewhere under ~/.claude/skills/ on your system. Otherwise the skill-enforcement hook will suggest skills you don't have. To enable: cp BB-skill-core/optional-triggers/third-party-skills.json ~/.claude/hooks/bb-skill-triggers.d/",
+  "keywords": {
+    ".c ": [
+      "c-programming"
+    ],
+    ".claude/": [
+      "update-config"
+    ],
+    ".h ": [
+      "c-programming"
+    ],
+    "agx orin": [
+      "jetson-agx-orin"
+    ],
+    "algorithm": [
+      "algorithms"
+    ],
+    "arch linux": [
+      "arch-linux"
+    ],
+    "archlinux": [
+      "arch-linux"
+    ],
+    "arm assembly": [
+      "ARM_assembly"
+    ],
+    "asm": [
+      "ARM_assembly"
+    ],
+    "authoring skill": [
+      "skill-authoring"
+    ],
+    "buildroot": [
+      "buildroot"
+    ],
+    "c programming": [
+      "c-programming"
+    ],
+    "can bus": [
+      "can"
+    ],
+    "canbus": [
+      "can"
+    ],
+    "canopen": [
+      "can"
+    ],
+    "diagram": [
+      "mermaid"
+    ],
+    "esp-idf": [
+      "esp32-c",
+      "c-programming"
+    ],
+    "esp32": [
+      "esp32-c",
+      "c-programming"
+    ],
+    "forecasting": [
+      "timeseries-forecasting"
+    ],
+    "fpga": [
+      "gowin-fpga"
+    ],
+    "gowin": [
+      "gowin-fpga"
+    ],
+    "hook": [
+      "update-config"
+    ],
+    "hooks": [
+      "update-config"
+    ],
+    "html to pdf": [
+      "web-to-pdf"
+    ],
+    "i2c": [
+      "i2c"
+    ],
+    "i2s": [
+      "i2s"
+    ],
+    "information website": [
+      "information-website-design"
+    ],
+    "iptables": [
+      "linux-networking"
+    ],
+    "jetson": [
+      "jetson-agx-orin"
+    ],
+    "kalman": [
+      "lqr"
+    ],
+    "libp2p": [
+      "libp2p"
+    ],
+    "linux networking": [
+      "linux-networking"
+    ],
+    "lqr": [
+      "lqr"
+    ],
+    "mcp": [
+      "update-config"
+    ],
+    "mermaid": [
+      "mermaid"
+    ],
+    "modbus": [
+      "modbus"
+    ],
+    "mqtt": [
+      "mqtt.md"
+    ],
+    "nftables": [
+      "linux-networking"
+    ],
+    "omarchy": [
+      "omarchy",
+      "arch-linux"
+    ],
+    "opencl": [
+      "opencl"
+    ],
+    "optimal control": [
+      "lqr"
+    ],
+    "pacman": [
+      "arch-linux"
+    ],
+    "pi pico": [
+      "rp2040",
+      "c-programming"
+    ],
+    "rp2040": [
+      "rp2040",
+      "c-programming"
+    ],
+    "rp2350": [
+      "rp2350",
+      "c-programming"
+    ],
+    "rs232": [
+      "serial"
+    ],
+    "rs485": [
+      "modbus",
+      "serial"
+    ],
+    "serial port": [
+      "serial"
+    ],
+    "settings.json": [
+      "update-config"
+    ],
+    "skill": [
+      "skill-authoring"
+    ],
+    "skill authoring": [
+      "skill-authoring"
+    ],
+    "spi": [
+      "spi"
+    ],
+    "svg": [
+      "svg"
+    ],
+    "tailwind": [
+      "tailwind"
+    ],
+    "timeseries": [
+      "timeseries-forecasting"
+    ],
+    "typography": [
+      "baseline-typography"
+    ],
+    "uart": [
+      "serial"
+    ],
+    "ufw": [
+      "linux-networking"
+    ],
+    "web to pdf": [
+      "web-to-pdf"
+    ],
+    "youtube download": [
+      "youtube-downloader"
+    ],
+    "yt-dlp": [
+      "youtube-downloader"
+    ]
+  }
+}

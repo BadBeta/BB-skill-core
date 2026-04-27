@@ -50,6 +50,19 @@ for f in "${SCRIPT_DIR}/hooks"/*.py "${SCRIPT_DIR}/hooks"/*.sh "${SCRIPT_DIR}/ho
 done
 chmod +x "${HOOKS_DIR}"/*.py "${HOOKS_DIR}"/*.sh 2>/dev/null || true
 
+# Opt-in: third-party skill triggers. The fragment maps prompt
+# keywords (mermaid, opencl, ARM_assembly, ...) to standalone skills
+# that BB-skill-core does NOT ship. Useful only if the user has those
+# skills installed personally under ~/.claude/skills/. Off by default;
+# set BB_INSTALL_THIRD_PARTY_TRIGGERS=1 to opt in.
+if [ "${BB_INSTALL_THIRD_PARTY_TRIGGERS:-0}" = "1" ]; then
+    src_opt="${SCRIPT_DIR}/optional-triggers/third-party-skills.json"
+    if [ -f "${src_opt}" ]; then
+        cp -p "${src_opt}" "${HOOKS_DIR}/bb-skill-triggers.d/third-party-skills.json"
+        echo "  + opt-in third-party skill triggers installed (61 keywords)"
+    fi
+fi
+
 # Backup existing settings
 if [ -f "${SETTINGS}" ]; then
     cp -p "${SETTINGS}" "${SETTINGS}.bak.$(date +%Y%m%d-%H%M%S)"

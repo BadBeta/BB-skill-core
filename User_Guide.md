@@ -34,10 +34,11 @@ All three install into `~/.claude/` (override with `CLAUDE_HOME=/some/path`).
 │   │   ├── rust.json                    ← from rust-phase-skills
 │   │   └── elixir.json                  ← from elixir-phase-skills
 │   ├── bb-skill-enforcement.py          ← core: [use-skills] marker, recent-window, Bash orientation exemption
-│   ├── bb-skill-triggers.json           ← core: language-independent keywords
+│   ├── bb-skill-triggers.json           ← core: empty by design (BB-skill-core ships no skills)
 │   ├── bb-skill-triggers.d/             ← drop-in directory
 │   │   ├── rust.json                    ← from rust-phase-skills
-│   │   └── elixir.json                  ← from elixir-phase-skills
+│   │   ├── elixir.json                  ← from elixir-phase-skills
+│   │   └── third-party-skills.json      ← OPT-IN: mermaid, ARM_assembly, opencl, etc. (see §1.7)
 │   ├── bb-tdd-state-hook.py             ← core: TDD gate ([TDD] marker, refactor-exempt)
 │   ├── bb-stop-review-check.py          ← core: review-on-Stop reminder
 │   ├── bb-milestone-commit-check.py     ← core: M-commit guard
@@ -210,6 +211,50 @@ rust-phase-skills/hooks/bb-post-generator-patterns.d/rust.json
 ```
 
 The hook picks it up next session.
+
+### 1.7 Trigger scoping rule — packs only reference what they ship
+
+Trigger keywords map prompt vocabulary to skills the LLM should
+invoke. To avoid suggesting skills that aren't installed, the rule
+across the ecosystem is:
+
+> **Each pack's trigger drop-in references only the skills that pack ships.**
+
+Concretely:
+
+| Pack | Skills shipped | Trigger drop-in references |
+|---|---|---|
+| BB-skill-core | none (pure infrastructure) | none — `bb-skill-triggers.json` is intentionally empty |
+| rust-phase-skills | `rust-planning`, `rust-implementing`, `rust-reviewing` | only those three |
+| elixir-phase-skills | `elixir-planning`, `elixir-implementing`, `elixir-reviewing`, `phoenix`, `phoenix-liveview` | only those five |
+
+When you install both language packs, their drop-in fragments merge
+at runtime; if a keyword appears in both (e.g. `refactor`, `review`,
+`planning`), the merged skill list contains the relevant entries
+from each pack. Adding a third language pack later adds its own
+triggers without touching the existing ones.
+
+**Opt-in: third-party-skill triggers.** `BB-skill-core/optional-triggers/
+third-party-skills.json` ships a 61-keyword fragment that maps prompt
+vocabulary to standalone skills NOT bundled by BB-skill-core or any
+language pack — `mermaid`, `svg`, `c-programming`, `ARM_assembly`,
+`i2c`, `opencl`, `tailwind`, `jetson-agx-orin`, etc. Useful only if
+you have those skills somewhere under `~/.claude/skills/` already.
+
+To enable at install time:
+
+```bash
+BB_INSTALL_THIRD_PARTY_TRIGGERS=1 ./install.sh
+```
+
+To enable on an already-installed system:
+
+```bash
+cp ~/Projects/BB-skill-core/optional-triggers/third-party-skills.json \
+   ~/.claude/hooks/bb-skill-triggers.d/
+```
+
+To disable, just `rm ~/.claude/hooks/bb-skill-triggers.d/third-party-skills.json`.
 
 ## 2. Install / uninstall
 
