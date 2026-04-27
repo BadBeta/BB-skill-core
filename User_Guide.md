@@ -102,11 +102,49 @@ jq .hooks ~/.claude/settings.json
 |---|---|---|
 | `bb-skill-enforcement.py` | UserPromptSubmit, PreToolUse | Every prompt; every non-exempt tool call. Detects `[use-skills]` marker, scans triggers, gates non-exempt tools until a Skill is invoked. |
 | `bb-anti-slop-scan.py` | PostToolUse (Edit/Write/NotebookEdit) | Every file edit. Runs the union of pattern groups whose `extensions` match the path. |
-| `bb-tdd-state-hook.py` | PostToolUse (Edit/Write/NotebookEdit) | Every file edit, but only acts on `IMPL_EXTENSIONS` files. Detects new public functions without a recent test edit. |
+| `bb-tdd-state-hook.py` | PostToolUse (Edit/Write/NotebookEdit) | **Default silent.** Activates when `[TDD]` appears in a recent prompt; emits a forceful full reminder on every fire. Refactor-exempt (see §1.5). |
 | `bb-rationale-marker-{rust,elixir}.py` | PostToolUse (Edit/Write/NotebookEdit) | Edits to `.rs` / `.ex` / `.exs`. Reminds about `// §§` rationale markers. |
 | `bb-no-std-build-check.py` | PostToolUse (Edit/Write/NotebookEdit) | Edits to `.rs` files in a `no_std` crate. Re-runs the build. |
 | `bb-milestone-commit-check.py` | PreToolUse (Bash) | Bash commands. Specifically guards against premature `M\d+:` milestone commits. |
 | `bb-stop-review-check.py` | Stop | Session end. Reminds to review changes / sync source. |
+
+### 1.5 TDD enforcement — the `[TDD]` marker
+
+The TDD gate (`bb-tdd-state-hook.py`) is **silent by default**. To turn
+it on for a session — or for as long as you're test-driving a feature —
+include the `[TDD]` marker anywhere in your prompt:
+
+```
+[TDD] add a function that converts hex strings to bytes
+```
+
+The marker stays active for the next `BB_TDD_RECENT_WINDOW` (default 5)
+user-message turns; after that the hook goes silent again. To turn it
+off explicitly mid-session, use `[no-TDD]` — the most-recent marker
+wins, so `[no-TDD]` in a later prompt overrides an earlier `[TDD]`.
+
+When active, the hook fires the **full reminder every time** (no fade)
+on edits that introduce a new public function in `IMPL_EXTENSIONS`
+files — except in the following structural exemptions, which silence
+the gate without overriding the marker:
+
+| Exemption | Catches |
+|---|---|
+| Recent test edit in same project (last 15 min) | Test-first cycle in flight |
+| File co-locates tests (`#[cfg(test)] mod tests`, `defmodule …Test`) | Test lives next to implementation |
+| NIF loader stub (`use Rustler` + `:erlang.nif_error/1`) | No isolated behaviour to test |
+| **New fn name appears in any test file** under `test/` / `tests/` / `spec/` | Re-exposing tested behaviour, extracting a helper from a tested fn |
+| **New fn name appears in `git log -S` history** | Pure rename / file move / module split |
+
+A single inline-fn-name match in either tests or git history is enough
+— if the codebase already knows that name, the edit is treated as a
+refactor and the gate stays quiet.
+
+To raise the activation window or shrink it:
+```bash
+export BB_TDD_RECENT_WINDOW=10   # marker stays active for 10 user turns
+export BB_TDD_RECENT_WINDOW=0    # disable the window (any [TDD] ever in transcript activates)
+```
 
 ## 2. Install / uninstall
 

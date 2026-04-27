@@ -46,6 +46,7 @@ Fails open: any exception exits 0 so the session is never bricked.
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -156,6 +157,32 @@ NEW_PUBLIC_FN_PATTERNS = {
     ".js": re.compile(r"(?m)^export\s+(?:async\s+)?function\s+[a-zA-Z]"),
     ".jsx": re.compile(r"(?m)^export\s+(?:async\s+)?function\s+[a-zA-Z]"),
 }
+
+# Name-capturing variants of NEW_PUBLIC_FN_PATTERNS — used to extract
+# the actual fn name(s) from an edit so the refactor exemptions can grep
+# test files / git history for prior occurrences.
+NEW_PUBLIC_FN_NAME_PATTERNS = {
+    ".rs":  re.compile(r"(?m)^\s*pub\s+(?:async\s+)?fn\s+([a-zA-Z_][a-zA-Z0-9_]*)"),
+    ".ex":  re.compile(r"(?m)^\s*def\s+([a-zA-Z_][a-zA-Z0-9_]*[!?]?)"),
+    ".exs": re.compile(r"(?m)^\s*def\s+([a-zA-Z_][a-zA-Z0-9_]*[!?]?)"),
+    ".go":  re.compile(r"(?m)^func\s+([A-Z][a-zA-Z0-9_]*)"),
+    ".ts":  re.compile(r"(?m)^export\s+(?:async\s+)?function\s+([a-zA-Z_][a-zA-Z0-9_]*)"),
+    ".tsx": re.compile(r"(?m)^export\s+(?:async\s+)?function\s+([a-zA-Z_][a-zA-Z0-9_]*)"),
+    ".js":  re.compile(r"(?m)^export\s+(?:async\s+)?function\s+([a-zA-Z_][a-zA-Z0-9_]*)"),
+    ".jsx": re.compile(r"(?m)^export\s+(?:async\s+)?function\s+([a-zA-Z_][a-zA-Z0-9_]*)"),
+}
+
+# [TDD] marker activation. Mirrors bb-skill-enforcement.py's
+# [use-skills] mechanism: hook is silent unless the user opts in by
+# putting [TDD] in a recent prompt; [no-TDD] in a more-recent prompt
+# overrides. Default-off so refactors / scripts / hook editing don't
+# get false-positive nagged.
+TDD_MARKER = "[TDD]"
+NO_TDD_MARKER = "[no-TDD]"
+TDD_RECENT_WINDOW = max(0, int(os.environ.get("BB_TDD_RECENT_WINDOW", "5")))
+
+# Test-file directories scanned by the refactor-exemption check.
+TEST_DIR_NAMES = ("test", "tests", "spec")
 
 # How recent is "recent" for a matching test edit, in seconds.
 RECENT_TEST_WINDOW_S = 15 * 60  # 15 minutes
@@ -345,9 +372,152 @@ def is_infra_path(path):
     return False
 
 
+def _user_message_text(record):
+    """Best-effort plaintext from a transcript user-message record."""
+    if not isinstance(record, dict):
+        return ""
+    if record.get("type") != "user":
+        return ""
+    msg = record.get("message")
+    if isinstance(msg, dict):
+        content = msg.get("content")
+    else:
+        content = record.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block.get("text", ""))
+            elif isinstance(block, str):
+                parts.append(block)
+        return "\n".join(parts)
+    return ""
+
+
+def tdd_marker_active(transcript_path):
+    """True if the most recent BB_TDD_RECENT_WINDOW user messages contain
+    a [TDD] marker not subsequently overridden by [no-TDD]. The transcript
+    is a JSONL file with one record per line; we walk backwards from the
+    end and look at user messages only."""
+    if not transcript_path:
+        return False
+    p = Path(transcript_path)
+    if not p.is_file():
+        return False
+    user_msgs = []
+    try:
+        with open(p, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                text = _user_message_text(rec)
+                if text:
+                    user_msgs.append(text)
+    except OSError:
+        return False
+    if not user_msgs:
+        return False
+    window = TDD_RECENT_WINDOW if TDD_RECENT_WINDOW > 0 else len(user_msgs)
+    recent = user_msgs[-window:]
+    # Walk back from most-recent: first marker we see wins.
+    for text in reversed(recent):
+        if NO_TDD_MARKER in text:
+            return False
+        if TDD_MARKER in text:
+            return True
+    return False
+
+
+def extract_new_public_fn_names(tool_input, ext):
+    """Return a list of public-fn names introduced by this edit's
+    new_string / file content. Empty list = none detected."""
+    pat = NEW_PUBLIC_FN_NAME_PATTERNS.get(ext)
+    if pat is None:
+        return []
+    blob = ""
+    for key in ("new_string", "content", "file_text"):
+        v = tool_input.get(key)
+        if isinstance(v, str):
+            blob += "\n" + v
+    if not blob:
+        return []
+    return list({m.group(1) for m in pat.finditer(blob)})
+
+
+def fn_name_in_test_files(project, name):
+    """True if `name` appears in any file under TEST_DIR_NAMES under
+    `project`. Word-boundary match, case-sensitive. Bounded scan: skips
+    files larger than 200 KB."""
+    if not name or not project:
+        return False
+    proj = Path(project)
+    pat = re.compile(rf"\b{re.escape(name)}\b")
+    for d_name in TEST_DIR_NAMES:
+        d = proj / d_name
+        if not d.is_dir():
+            continue
+        try:
+            for f in d.rglob("*"):
+                if not f.is_file():
+                    continue
+                try:
+                    if f.stat().st_size > 200_000:
+                        continue
+                    if pat.search(f.read_text(errors="ignore")):
+                        return True
+                except (OSError, UnicodeDecodeError):
+                    continue
+        except OSError:
+            continue
+    return False
+
+
+def fn_name_in_git_history(project, name):
+    """True if `git log --all -S '<name>'` returns at least one commit.
+    Bounded by a 3-second timeout; returns False on any error so a
+    git-less / detached project doesn't false-block."""
+    if not name or not project:
+        return False
+    try:
+        r = subprocess.run(
+            ["git", "log", "--all", "-S", name, "-1", "--pretty=format:%H"],
+            cwd=project,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        return bool(r.stdout.strip())
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return False
+
+
+def is_refactor_of_known_name(project, names):
+    """Either of the structural exemptions is enough to treat the edit
+    as a refactor / re-exposure of behaviour that's already named
+    elsewhere in the codebase."""
+    for n in names:
+        if fn_name_in_test_files(project, n):
+            return True
+        if fn_name_in_git_history(project, n):
+            return True
+    return False
+
+
 def handle(data):
     tool_name = data.get("tool_name") or ""
     if tool_name not in EDIT_TOOLS:
+        return None
+    # [TDD] marker gate. Default-silent: if the user hasn't opted in,
+    # do nothing. This eliminates the false-positive class entirely
+    # for refactors / scripts / hook editing / etc.
+    if not tdd_marker_active(data.get("transcript_path")):
         return None
     session_id = data.get("session_id") or "unknown"
     tool_input = data.get("tool_input") or {}
@@ -406,36 +576,37 @@ def handle(data):
     if is_nif_loader_stub_file(path, ext):
         return None
 
-    # TDD gate violation (potentially). Warn, don't block. Track per-
-    # session fire count so the second-and-onward fire is a one-liner
-    # rather than the same multi-paragraph reminder.
-    fire_count = int(state.get("fire_count", 0))
-    state["fire_count"] = fire_count + 1
-    save_state(session_id, state)
+    # Refactor exemptions. If the new public fn name(s) introduced by
+    # this edit already appear in test files OR in git log -S history,
+    # the edit is structurally a refactor (rename / move / extract /
+    # re-expose) rather than the introduction of new behaviour. Stay
+    # silent — the existing tests already cover the named behaviour.
+    new_names = extract_new_public_fn_names(tool_input, ext)
+    if new_names and is_refactor_of_known_name(project, new_names):
+        return None
 
-    if fire_count == 0:
-        return (
-            "TDD gate reminder — just wrote a new public function to "
-            f"{path} but no test file in the same project has been "
-            f"edited in the last {RECENT_TEST_WINDOW_S // 60} minutes "
-            "of this session. If you wrote the test first and confirmed "
-            "it failed, fine — the hook is heuristic and your discipline "
-            "may be ahead of this check. If you did NOT, STOP: write "
-            "the failing test now, run it, confirm red, THEN re-edit "
-            "this file. See rust-implementing §0 / elixir-implementing "
-            "§0 for the full workflow and the autonomous-mode warning."
-            "\n\n"
-            "The ONLY valid exceptions are: HEEx/EEx templates, CSS/styling, "
-            "and one-off scripts outside lib/src/. A `def`/`pub fn` in "
-            "lib/ or src/ is production code — 'glue code' and 'thin "
-            "wrapper' are NOT valid exemptions. The review that catches "
-            "bugs in untested code costs 10x more than the test that "
-            "prevents them.\n\n"
-            "Subsequent fires this session will be a one-liner."
-        )
+    # Forceful: when [TDD] is active, every fire emits the FULL
+    # reminder. No fade — fade was the previous default-on behaviour
+    # that made later fires easy to miss. The marker gate already
+    # eliminates the false-positive class, so loud-every-time is the
+    # right tradeoff.
     return (
-        f"TDD gate — new pub fn in {path}, no recent test edit "
-        f"(fire #{fire_count + 1} this session). See implementing-skill §0."
+        "TDD gate reminder — just wrote a new public function to "
+        f"{path} but no test file in the same project has been "
+        f"edited in the last {RECENT_TEST_WINDOW_S // 60} minutes "
+        "of this session, the file does not co-locate tests, and the "
+        "fn name is novel (not in test files, not in git log history). "
+        "If you wrote the test first and confirmed it failed, fine — "
+        "the hook is heuristic and your discipline may be ahead of this "
+        "check. If you did NOT, STOP: write the failing test now, run "
+        "it, confirm red, THEN re-edit this file. See rust-implementing "
+        "§0 / elixir-implementing §0 for the full workflow.\n\n"
+        "The ONLY valid exceptions are: HEEx/EEx templates, CSS/styling, "
+        "and one-off scripts outside lib/src/. A `def`/`pub fn` in "
+        "lib/ or src/ is production code — 'glue code' and 'thin "
+        "wrapper' are NOT valid exemptions.\n\n"
+        "To silence this gate for the current session, add `[no-TDD]` "
+        "to your next prompt."
     )
 
 
