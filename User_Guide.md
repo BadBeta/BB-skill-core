@@ -523,11 +523,33 @@ considered before doing the work," see §9 — milestone skill reports.
 For long-running, milestone-structured projects (PLAN.md with `M1:` /
 `M2:` / `M3:` …), the `bb-milestone-skill-report.py` PreToolUse hook
 blocks Edit/Write into the project until you have written a brief
-entry for the active milestone in `milestone_skill_report.md` listing
-which skill sections you reviewed.
+entry for the active milestone in `milestone_skill_report.md`.
 
 This is the strongest enforcement mechanism in the BB stack short of
 hard-blocking individual file classes.
+
+### What goes in an entry
+
+List the skill sections that are **genuinely relevant** to this
+specific milestone — and only those. The point is to record
+deliberate consideration, not exhaustive enumeration.
+
+- If a skill was already loaded in the session and a section bears on
+  this milestone → list it with the section reference and a one-line
+  why.
+- If a skill *should* be loaded for this milestone but hasn't been
+  yet → load it (`Skill <name>`) and list the relevant section.
+- If a skill is loaded but irrelevant to this milestone → omit it.
+  Do not pad the report. A forced "skill-X: n/a" line is worse than
+  silence; the act of listing should mean "I considered this and it
+  applies."
+
+So a milestone about "background job retry semantics" might list
+`elixir-planning §Resilience` and `oban §Retry strategies` only —
+even if `phoenix-liveview` is loaded. A milestone about "LiveView
+component refactor" might list `phoenix-liveview §Streams`,
+`elixir-implementing §with-chains`, and `elixir-reviewing
+§Testing-LiveView` and skip everything else.
 
 ### When it fires
 
