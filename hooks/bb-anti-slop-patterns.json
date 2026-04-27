@@ -5,24 +5,15 @@
     "warn": "Likely slop but has legitimate uses. Hook injects a gentle reminder."
   },
   "universal": {
-    "extensions": [
-      ".rs",
-      ".ex",
-      ".exs",
-      ".c",
-      ".h",
-      ".py",
-      ".ts",
-      ".js",
-      ".go"
-    ],
+    "_extensions_note": "Computed at load time by bb-anti-slop-scan.py as the union of all language groups' extensions (after .d/ merge). Hand-edits to this list are overwritten. With only rust+elixir packs installed it resolves to .rs/.ex/.exs/.c/.h.",
+    "extensions": [],
     "checks": [
       {
         "id": "planning-citation-in-source",
         "cite": "<lang>-planning (plan-document hygiene) / <lang>-reviewing (citations-in-source anti-pattern)",
         "severity": "warn",
         "regex": "(PLAN\\.md|TDD'd|(?:rust|elixir|c)-(?:planning|implementing|reviewing)\\s*\u00a7|skill-section\\s*\u00a7)",
-        "skip_if_path_matches": "/\\.claude/hooks/|/\\.claude/skills/|/skill_hooks_mechanics/|/(?:rust|elixir)-phase-skills/",
+        "skip_if_path_matches": "/\\.claude/hooks/|/\\.claude/skills/|/skill_hooks_mechanics/|/(?:rust|elixir)-phase-skills/|/BB-skill-core/",
         "message": "Citation to a planning / skill document found in source code. Citations rot the first time the document renumbers. Move to the design doc (PLAN.md / ARCHITECTURE.md) \u2014 source describes current invariants, not the process that produced them."
       },
       {

@@ -61,19 +61,43 @@ def test_load_patterns_merges_extensions_and_checks():
         assert db["elixir"]["extensions"] == [".ex", ".exs"]
 
 
-def test_load_patterns_extensions_union_preserves_order_dedupes():
+def test_universal_extensions_are_union_of_language_groups():
+    """Universal group's extensions are computed as the union of all
+    language groups' extensions after the .d/ merge. Any value typed
+    into the universal extensions field in the base file is overwritten."""
     with tempfile.TemporaryDirectory() as tmp:
         home = Path(tmp)
         hooks = home / ".claude" / "hooks"
         _write_json(hooks / "bb-anti-slop-patterns.json", {
-            "universal": {"extensions": [".rs", ".ex"], "checks": []},
+            "universal": {"extensions": ["IGNORED"], "checks": [{"id": "u1"}]},
         })
-        _write_json(hooks / "bb-anti-slop-patterns.d" / "extra.json", {
-            "universal": {"extensions": [".ex", ".py"], "checks": []},
+        _write_json(hooks / "bb-anti-slop-patterns.d" / "rust.json", {
+            "rust": {"extensions": [".rs"], "checks": []},
+            "c": {"extensions": [".c", ".h"], "checks": []},
+        })
+        _write_json(hooks / "bb-anti-slop-patterns.d" / "elixir.json", {
+            "elixir": {"extensions": [".ex", ".exs"], "checks": []},
         })
         mod = _load_module_with_home(home)
         db = mod.load_patterns()
-        assert db["universal"]["extensions"] == [".rs", ".ex", ".py"]
+        # Sorted-filename dropin order: elixir.json before rust.json,
+        # so .ex/.exs come before .rs/.c/.h. Universal IGNORED is replaced.
+        assert db["universal"]["extensions"] == [".ex", ".exs", ".rs", ".c", ".h"]
+
+
+def test_universal_extensions_empty_when_no_language_packs():
+    """Core-only install: no .d/ files. Universal group has no
+    extensions, so universal checks scan nothing — exactly right
+    when no language packs are installed."""
+    with tempfile.TemporaryDirectory() as tmp:
+        home = Path(tmp)
+        hooks = home / ".claude" / "hooks"
+        _write_json(hooks / "bb-anti-slop-patterns.json", {
+            "universal": {"extensions": [".rs", ".py"], "checks": [{"id": "u1"}]},
+        })
+        mod = _load_module_with_home(home)
+        db = mod.load_patterns()
+        assert db["universal"]["extensions"] == []
 
 
 def test_load_patterns_no_dropin_dir_works():

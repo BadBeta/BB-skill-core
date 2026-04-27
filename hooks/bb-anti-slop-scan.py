@@ -123,6 +123,24 @@ def load_patterns():
                 existing["extensions"] = ext_existing
                 existing.setdefault("checks", [])
                 existing["checks"].extend(group.get("checks") or [])
+
+    # Pack-driven universal extensions: the universal group's extension
+    # list is the union of every language group's extensions (after the
+    # .d/ merge). With no language packs installed, the union is empty
+    # and the universal checks scan nothing — that's the right behaviour
+    # for a core-only install.
+    universal = db.get("universal")
+    if isinstance(universal, dict):
+        union = []
+        for group_name, group in db.items():
+            if group_name.startswith("_") or group_name == "universal":
+                continue
+            if not isinstance(group, dict):
+                continue
+            for ext in (group.get("extensions") or []):
+                if ext not in union:
+                    union.append(ext)
+        universal["extensions"] = union
     return db
 
 

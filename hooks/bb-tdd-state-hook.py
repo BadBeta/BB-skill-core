@@ -61,16 +61,53 @@ EDIT_TOOLS = {"Edit", "Write", "NotebookEdit"}
 # config, etc.).
 TEST_PATH_PATTERNS = [
     re.compile(r"(^|/)tests?/"),               # tests/ or test/ directory
-    re.compile(r"_test\.(rs|ex|exs|py|go)$"),  # Rust integration, Go
+    re.compile(r"_test\.(rs|ex|exs|go)$"),    # Rust integration, Go
     re.compile(r"\.test\.(ts|tsx|js|jsx)$"),  # JS/TS
     re.compile(r"_spec\.(rb|ex|exs)$"),       # RSpec-ish, Elixir spec
     re.compile(r"/__tests__/"),               # Jest convention
-    re.compile(r"test_[^/]+\.py$"),           # Pytest convention
 ]
 
 # File extensions we consider "source code" for TDD-applicability.
 # Production-code matches trigger the check; everything else is ignored.
-IMPL_EXTENSIONS = {".rs", ".ex", ".exs", ".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".c", ".h", ".cpp", ".hpp"}
+#
+# Pack-driven: this set is the union of `extensions` declared by all
+# anti-slop pattern fragments under bb-anti-slop-patterns.d/*.json
+# (excluding the "universal" group, which is itself the union). With
+# only rust-phase-skills + elixir-phase-skills installed, this resolves
+# to {.rs .ex .exs .c .h}. With no language packs installed, this is
+# empty and the TDD hook silently no-ops — exactly the right behaviour
+# for a core-only install.
+def _compute_impl_extensions():
+    base = Path.home() / ".claude" / "hooks" / "bb-anti-slop-patterns.json"
+    dropin_dir = Path.home() / ".claude" / "hooks" / "bb-anti-slop-patterns.d"
+    exts = set()
+
+    def _absorb(doc):
+        if not isinstance(doc, dict):
+            return
+        for group_name, group in doc.items():
+            if group_name.startswith("_") or group_name == "universal":
+                continue
+            if not isinstance(group, dict):
+                continue
+            for ext in (group.get("extensions") or []):
+                exts.add(ext.lower())
+
+    try:
+        if base.exists():
+            _absorb(json.loads(base.read_text() or "{}"))
+    except Exception:
+        pass
+    if dropin_dir.is_dir():
+        for path in sorted(dropin_dir.glob("*.json")):
+            try:
+                _absorb(json.loads(path.read_text() or "{}"))
+            except Exception:
+                continue
+    return exts
+
+
+IMPL_EXTENSIONS = _compute_impl_extensions()
 
 # Production-code paths that are NOT test code.
 IMPL_PATH_HINTS = [
@@ -112,7 +149,6 @@ NEW_PUBLIC_FN_PATTERNS = {
     ".ex": re.compile(r"(?m)^\s*def\s+[a-zA-Z_]"),
     ".exs": re.compile(r"(?m)^\s*def\s+[a-zA-Z_]"),
     # Python: top-level `def ` (not `_` prefix). Very rough.
-    ".py": re.compile(r"(?m)^def\s+[a-zA-Z]"),
     ".go": re.compile(r"(?m)^func\s+[A-Z]"),   # exported = uppercase
     # TS/JS: `export function` / `export const X =`. Very rough.
     ".ts": re.compile(r"(?m)^export\s+(?:async\s+)?function\s+[a-zA-Z]"),
