@@ -49,6 +49,8 @@ CORE_FILES=(
     bb-stop-review-check.py
     bb-milestone-commit-check.py
     bb-sweep-rationale-markers.sh
+    bb-post-generator-scan.py
+    bb-milestone-skill-report.py
 )
 
 echo "BB-skill-core uninstall"
@@ -58,7 +60,7 @@ for name in "${CORE_FILES[@]}"; do
 done
 
 # Drop-in dirs: only remove if empty
-for d in bb-anti-slop-patterns.d bb-skill-triggers.d; do
+for d in bb-anti-slop-patterns.d bb-skill-triggers.d bb-post-generator-patterns.d; do
     if [ -d "${HOOKS_DIR}/${d}" ] && [ -z "$(ls -A "${HOOKS_DIR}/${d}" 2>/dev/null)" ]; then
         rmdir "${HOOKS_DIR}/${d}"
     fi

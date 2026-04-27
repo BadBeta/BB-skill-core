@@ -347,6 +347,55 @@ def scan_file(file_path, patterns_db, edit_window=None):
     return matches
 
 
+# ── Per-session dedupe ──────────────────────────────────────────────
+# Each (check_id, file_path) pair fires at most once per session. This
+# stops the "same warning hammered N times for the same line" failure
+# mode (Phoenix runtime.exs review feedback).
+DEDUPE_DIR = Path.home() / ".claude" / "cache" / "anti-slop-seen"
+
+
+def _seen_file(session_id):
+    DEDUPE_DIR.mkdir(parents=True, exist_ok=True)
+    return DEDUPE_DIR / f"{session_id or 'unknown'}.json"
+
+
+def _load_seen(session_id):
+    f = _seen_file(session_id)
+    if not f.is_file():
+        return set()
+    try:
+        return set(tuple(x) for x in json.loads(f.read_text() or "[]"))
+    except Exception:
+        return set()
+
+
+def _save_seen(session_id, seen):
+    f = _seen_file(session_id)
+    try:
+        f.write_text(json.dumps(sorted(list(seen))))
+    except OSError:
+        pass
+
+
+def filter_already_seen(session_id, file_path, matches):
+    """Drop matches whose (check_id, file_path) tuple has already
+    been emitted for this session."""
+    seen = _load_seen(session_id)
+    return [
+        m for m in matches
+        if (m.get("check_id"), file_path) not in seen
+    ]
+
+
+def mark_seen(session_id, file_path, matches):
+    """Record (check_id, file_path) tuples so future scans in this
+    session don't re-emit them."""
+    seen = _load_seen(session_id)
+    for m in matches:
+        seen.add((m.get("check_id"), file_path))
+    _save_seen(session_id, seen)
+
+
 def edit_window_for_tool(tool_name, tool_input, file_path):
     """
     Compute the inclusive 1-indexed line range that the current edit
@@ -450,6 +499,15 @@ def main():
     matches = scan_file(file_path, patterns_db, edit_window=edit_window)
     if not matches:
         return 0
+
+    # Per-session, per-(check_id, file_path) dedupe — each warning fires
+    # at most once per session per file. Stops the "same warning hammered
+    # N times" failure mode without losing first-fire signal.
+    session_id = data.get("session_id") or "unknown"
+    matches = filter_already_seen(session_id, file_path, matches)
+    if not matches:
+        return 0
+    mark_seen(session_id, file_path, matches)
 
     reminder = format_reminder(file_path, matches)
     out = {

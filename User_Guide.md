@@ -432,7 +432,79 @@ which skill matches the prompt.
   uninstall regressions cheaply. The merger is idempotency-tested,
   but custom install logic isn't.
 
-## 8. Where to look for…
+## 8. What is NOT enforced
+
+A few habits that have come up in earlier reviews and are explicitly
+**not** part of the contract — don't ask the LLM (or yourself) to do them:
+
+- **In-prose citation of skill sections** (`phoenix-liveview §Async`,
+  `rust-implementing §3.4`). These rot the moment a skill renumbers or
+  is split, and no hook checks for them. The `planning-citation-in-source`
+  anti-slop check actively flags them in source code. The sanctioned
+  scaffolding form is the `// §§ <text>` rationale marker, which lives
+  in code temporarily and is stripped by `bb-sweep-rationale-markers.sh`
+  before commit.
+- **Manual change-summaries inside the codebase** (`# changed X for Y`,
+  `# previously did Z`). Belongs in commit messages and PR descriptions;
+  the source-of-truth is the current code plus git history.
+- **"Always recall this skill section" reminders.** Skills are loaded
+  into context by the activation system; the LLM either applies the
+  knowledge or it doesn't. If a class of mistake keeps happening, add
+  an anti-slop pattern (mechanical check) or a `bb-post-generator-patterns`
+  catalog entry — passive prose reminders aren't enforcement.
+
+If you want **proactive enforcement** of "the right skill sections were
+considered before doing the work," see §9 — milestone skill reports.
+
+## 9. Milestone skill reports (`milestone_skill_report.md`)
+
+For long-running, milestone-structured projects (PLAN.md with `M1:` /
+`M2:` / `M3:` …), the `bb-milestone-skill-report.py` PreToolUse hook
+blocks Edit/Write into the project until you have written a brief
+entry for the active milestone in `milestone_skill_report.md` listing
+which skill sections you reviewed.
+
+This is the strongest enforcement mechanism in the BB stack short of
+hard-blocking individual file classes.
+
+### When it fires
+
+- Project has a `PLAN.md` with at least one `M\d+:` milestone heading.
+- The lowest-numbered milestone without a `DONE` / `✓` marker is the
+  **active milestone**.
+- LLM tries to Edit/Write a project file (anything except `PLAN.md`
+  and `milestone_skill_report.md` themselves — those are always
+  writable so the report can be created).
+- `milestone_skill_report.md` is missing OR has no entry for the
+  active milestone OR the entry is shorter than 50 chars of content.
+
+### Required format
+
+```markdown
+# Milestone skill reports
+
+## M3 — payment processing
+
+Skills considered before starting:
+- elixir-planning §11 (resilience: retries, idempotency)
+- elixir-implementing §3.6 (TDD: test the boundary, not the impl)
+- ash §3.2 (changeset validation chain)
+- phoenix §Configuration Precedence (avoiding runtime.exs port bug)
+```
+
+The hook checks for an `M<N>` heading or bullet matching the active
+milestone, with at least 50 chars of body content under it. That's
+all — no specific skills required, no fixed format beyond the
+milestone marker.
+
+### Bypassing
+
+- `[no-skills-report]` in a recent prompt → hook stays silent for the
+  rest of the session
+- Editing `PLAN.md` to mark the current milestone DONE → next-lowest
+  becomes active; old entry is no longer required
+
+## 10. Where to look for…
 
 | Need | File |
 |---|---|

@@ -46,6 +46,70 @@ EXEMPT_TOOLS = {
 USE_MARKER = "[use-skills]"
 NO_MARKER = "[no-skills]"
 
+# ── Bash orientation exemption ───────────────────────────────────────
+# Commands that only look at state (no writes, no side effects beyond
+# stdout) should not require a Skill invocation. Skill enforcement is
+# meant to gate "about to change something," not "about to look at
+# something."
+#
+# The classification splits on shell separators (`;`, `&&`, `||`, `|`)
+# and demands EVERY segment be in the read-only allow-list. A single
+# mutating segment poisons the whole chain.
+ORIENTATION_BIN_ALLOWLIST = {
+    "ls", "pwd", "which", "find", "tree", "cat", "head", "tail",
+    "wc", "file", "stat", "echo", "printf", "true", "false",
+    "basename", "dirname", "realpath", "readlink", "test", "[",
+    "env", "whoami", "id", "uname", "date", "hostname",
+    "grep", "egrep", "fgrep", "rg", "less", "more", "type",
+    "df", "du",   # bounded; report-only
+}
+# git subcommands that are read-only (no working-tree or history mutation).
+ORIENTATION_GIT_SUBCMDS = {
+    "status", "log", "diff", "show", "branch", "tag",
+    "remote", "rev-parse", "rev-list", "config",  # config without args is read
+    "describe", "blame", "ls-files", "ls-tree", "cat-file",
+    "shortlog", "reflog", "for-each-ref", "name-rev",
+    "merge-base", "symbolic-ref",
+}
+SHELL_SPLIT_RE = re.compile(r"\s*(?:&&|\|\||;|\|)\s*")
+REDIRECT_RE = re.compile(r"(?<![<>])(?:>|>>|<>|<<|<<<|2>|&>|tee\b)")
+
+
+def bash_command_is_orientation(command):
+    """True iff every shell segment is a read-only orientation command.
+    Empty / unparseable / containing redirects → False (default-deny so
+    a malformed parse never short-circuits enforcement)."""
+    if not isinstance(command, str) or not command.strip():
+        return False
+    if REDIRECT_RE.search(command):
+        return False
+    segments = SHELL_SPLIT_RE.split(command.strip())
+    if not segments:
+        return False
+    for seg in segments:
+        seg = seg.strip()
+        if not seg:
+            return False
+        # Strip leading env-var assignments (FOO=bar cmd ...)
+        while re.match(r"^[A-Za-z_][A-Za-z0-9_]*=\S+\s+", seg):
+            seg = re.sub(r"^[A-Za-z_][A-Za-z0-9_]*=\S+\s+", "", seg)
+        tokens = seg.split()
+        if not tokens:
+            return False
+        cmd = tokens[0]
+        # Strip leading `./` or absolute path: still want the basename
+        cmd = cmd.rsplit("/", 1)[-1]
+        if cmd == "git":
+            if len(tokens) < 2:
+                return False  # bare `git` prints help; safe-but-unusual → gate
+            sub = tokens[1]
+            if sub not in ORIENTATION_GIT_SUBCMDS:
+                return False
+            continue
+        if cmd not in ORIENTATION_BIN_ALLOWLIST:
+            return False
+    return True
+
 
 def load_triggers():
     """
@@ -420,6 +484,12 @@ def handle_pre_tool_use(data):
         return 0, None
     if tool_name in EXEMPT_TOOLS:
         return 0, None
+    # Read-only Bash commands (ls, pwd, git status, etc.) are exempt —
+    # skill enforcement is for mutation, not orientation.
+    if tool_name == "Bash":
+        cmd = (data.get("tool_input") or {}).get("command", "")
+        if bash_command_is_orientation(cmd):
+            return 0, None
     idx = latest_user_index(records)
     if idx >= 0 and skill_used_recently(records, idx):
         return 0, None

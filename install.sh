@@ -38,6 +38,7 @@ echo
 
 mkdir -p "${HOOKS_DIR}/bb-anti-slop-patterns.d"
 mkdir -p "${HOOKS_DIR}/bb-skill-triggers.d"
+mkdir -p "${HOOKS_DIR}/bb-post-generator-patterns.d"
 
 # Copy hook files (overwrites — that's the upgrade path).
 echo "[1/3] copying hook files…"
