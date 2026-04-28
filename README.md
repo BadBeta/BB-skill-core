@@ -69,3 +69,5 @@ python3 tests/test_merge_settings.py
 | `install.sh` / `uninstall.sh` | Pack lifecycle |
 | `VERSION` | Pack version (language packs pin a minimum via `REQUIRES_CORE`) |
 | `tests/` | Pack tests |
+
+→ Full architecture and how-to-extend reference: [User_Guide.md](User_Guide.md).
