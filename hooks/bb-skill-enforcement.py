@@ -277,6 +277,113 @@ SLASH_COMMAND_RE = re.compile(
     r"<command-name>\s*/?(?P<name>[a-zA-Z0-9_-]+)\s*</command-name>"
 )
 
+# ── Per-citation enforcement ─────────────────────────────────────────
+# The base "≥1 skill invoked" gate accepts any one Skill call as
+# satisfying the turn. That lets the assistant cite phoenix in an
+# applicability list without ever loading it ("citing without loading"
+# — the failure mode that motivated this stricter check).
+#
+# Two detection patterns:
+#
+#   STRICT  — any line `<skill>: §<sec>...` (the documented format from
+#             PHASE_REPORTING_INSTRUCTION). Optional bold/bullet decoration.
+#   BULLET  — markdown bold-bullet `- **<skill>**: ...` (catches
+#             malformed citations that omit the §, like the real-world
+#             slip the user reported).
+#
+# Citations are filtered against `known_skills()` (built from the trigger
+# map) so non-skill bold bullets like `- **mix.exs**: ...` don't deny.
+# `<skill>: n/a — ...` is excluded — explicit non-applicability is fine.
+SKILL_CITATION_STRICT_RE = re.compile(
+    r"(?m)^[\s\->*]*(?:\*\*)?(?P<skill>[a-z][a-z0-9_-]*[a-z0-9])(?:\*\*)?:\s+(?!n/a\b)[^\n]*§"
+)
+SKILL_CITATION_BULLET_RE = re.compile(
+    r"(?m)^[\s>]*[-*]\s+\*\*(?P<skill>[a-z][a-z0-9_-]*[a-z0-9])\*\*:\s*(?!n/a\b)\S"
+)
+
+
+def known_skills():
+    """Set of skill names declared in bb-skill-triggers.json + drop-ins.
+    Used as a whitelist when scanning assistant text for citations, so
+    non-skill bold bullets (e.g. `- **mix.exs**: ...`) don't trigger
+    enforcement."""
+    triggers = load_triggers()
+    skills = set()
+    for _kw, vals in (triggers.get("keywords") or {}).items():
+        if isinstance(vals, list):
+            skills.update(v for v in vals if isinstance(v, str))
+        elif isinstance(vals, str):
+            skills.add(vals)
+    return skills
+
+
+def cited_skills_since(records, start_idx, allowed):
+    """Skills the assistant has named in an applicability-style citation
+    since `start_idx`. Filtered against `allowed` (the known-skills
+    whitelist) to avoid false positives on prose bold-bullets."""
+    cited = set()
+    for rec in records[start_idx + 1:]:
+        if rec.get("type") != "assistant":
+            continue
+        content = (rec.get("message") or {}).get("content", [])
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not (isinstance(block, dict) and block.get("type") == "text"):
+                continue
+            text = block.get("text", "")
+            if not text:
+                continue
+            for pat in (SKILL_CITATION_STRICT_RE, SKILL_CITATION_BULLET_RE):
+                for m in pat.finditer(text):
+                    name = m.group("skill")
+                    if name in allowed:
+                        cited.add(name)
+    return cited
+
+
+def invoked_skills_recently(records, current_user_idx, window=None):
+    """Set of skill names invoked via the Skill tool OR a slash command
+    in the recent window. Pairs with `cited_skills_since` to verify each
+    cited skill was actually loaded."""
+    if window is None:
+        window = SKILL_RECENT_WINDOW
+    invoked = set()
+    user_indices = _user_indices(records)
+    if not user_indices:
+        return invoked
+    try:
+        current_pos = user_indices.index(current_user_idx)
+    except ValueError:
+        return invoked
+    if window <= 0:
+        start_idx = current_user_idx
+    else:
+        start_pos = max(0, current_pos - window + 1)
+        start_idx = user_indices[start_pos]
+    for rec in records[start_idx:]:
+        rec_type = rec.get("type")
+        if rec_type == "assistant":
+            content = (rec.get("message") or {}).get("content", [])
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if (
+                    isinstance(block, dict)
+                    and block.get("type") == "tool_use"
+                    and block.get("name") == "Skill"
+                ):
+                    skill_input = block.get("input") or {}
+                    name = skill_input.get("skill")
+                    if isinstance(name, str) and name:
+                        invoked.add(name)
+        elif rec_type == "user":
+            text = extract_text((rec.get("message") or {}).get("content"))
+            if text:
+                for m in SLASH_COMMAND_RE.finditer(text):
+                    invoked.add(m.group("name"))
+    return invoked
+
 
 def _user_indices(records):
     return [i for i, rec in enumerate(records) if is_typed_user_message(rec)]
@@ -389,23 +496,33 @@ PHASE_REPORTING_INSTRUCTION = (
     "  For each APPLICABLE skill, emit a one-line applicability note "
     "using a short section reference:\n"
     "    <skill>: §<sec>[, §<sec>] — <one-line why it applies>\n"
+    "  Citations MUST include at least one §<section> marker. Bare "
+    "claims like `phoenix: applies` or `- **phoenix**: relevant` are "
+    "treated as malformed citations — the PreToolUse hook verifies "
+    "that EACH cited skill was actually invoked via the `Skill` tool "
+    "in the recent window. Citing a skill without loading it is the "
+    "exact failure mode this check exists to catch.\n"
     "  Irrelevant keyword matches (e.g. skill-authoring triggering on "
     "a Rust coding task) may be omitted entirely, or noted once as "
     "`<skill>: n/a — <one-line why it's a false positive>` if you "
-    "want to record that you checked.\n\n"
+    "want to record that you checked. The `n/a` form does NOT require "
+    "an invocation.\n\n"
     "  Example:\n"
     "    rust-planning: §5.2, §16 #2 — Stage 2 lib+bin; hexagonal "
     "ports/adapters split drives trait placement.\n"
     "    rust-implementing: §Decision Table Error Handling — typed "
-    "enum + `?`, not `Box<dyn Error>`.\n\n"
+    "enum + `?`, not `Box<dyn Error>`.\n"
+    "    skill-authoring: n/a — Rust coding task, not a skill edit.\n\n"
     "  The act of scanning each applicable skill for which sections "
     "apply IS the point. Force-fitting a citation is worse than "
-    "omitting — if a skill genuinely doesn't apply, skip it.\n\n"
-    "INLINE RATIONALE MARKERS — encouraged during development:\n"
+    "omitting — if a skill genuinely doesn't apply, skip it (or `n/a` "
+    "it). If you cite it, you must have loaded it.\n\n"
+    "INLINE RATIONALE MARKERS — required at decision sites:\n"
     "  When you apply a specific skill rule / decision-table row / "
-    "BAD-GOOD pair at a code site, you may leave an ephemeral marker "
-    "in-source. The marker goes inside a normal comment, immediately "
-    "after the opener, as a doubled section-sign sentinel:\n\n"
+    "BAD-GOOD pair to drive a non-obvious code choice, you MUST leave "
+    "a `§§` marker at the site. The marker goes inside a normal "
+    "comment, immediately after the opener, as a doubled section-sign "
+    "sentinel:\n\n"
     "    Rust/C/Go/JS/TS:  // §§ <skill>: §<sec> — <why here>\n"
     "    Python/Elixir:    # §§ <skill>: §<sec> — <why here>\n"
     "    HTML/XML:         <!-- §§ <skill>: §<sec> — <why here> -->\n\n"
@@ -413,12 +530,33 @@ PHASE_REPORTING_INSTRUCTION = (
     "      /* §§\n"
     "       * <rationale paragraph>\n"
     "       §§ */\n\n"
+    "  WHEN TO MARK (required):\n"
+    "    * The choice was driven by a named decision-table row or "
+    "BAD/GOOD pair (e.g. multi-clause head over `case`, behaviour over "
+    "protocol, `with` chain over nested `case`).\n"
+    "    * The choice rules out a tempting alternative the next reader "
+    "would reach for (e.g. `Repo.insert!` → `Repo.insert`; raw JWT lib "
+    "→ Guardian; hand-rolled plug → library plug).\n"
+    "    * The choice encodes a non-obvious constraint (e.g. constant-"
+    "time compare for a secret; bcrypt rounds lowered in test config; "
+    "citext for case-insensitive uniqueness).\n"
+    "    * Each cited skill in your applicability notes should "
+    "correspond to AT LEAST ONE marker in the diff (or a one-line note "
+    "in the response why the skill drove a global structural choice "
+    "that doesn't fit a single line).\n\n"
+    "  WHEN TO SKIP (don't mark):\n"
+    "    * Trivial idiomatic code with no decision (e.g. `Enum.map`, "
+    "string interpolation).\n"
+    "    * Pure boilerplate (module headers, `use` directives, child "
+    "specs that the framework dictates).\n"
+    "    * Tests — markers belong on the production code that the test "
+    "is exercising, not on the test itself.\n\n"
     "  These are NOT documentation — they are dev-time scaffolding that "
     "records which skill fragment drove the decision. The anti-slop "
     "scanner skips them (they are explicitly labelled as ephemeral). "
     "The sweep tool `~/.claude/hooks/bb-sweep-rationale-markers.sh` "
     "removes them cleanly before ship. `grep -rn '§§' src/` finds "
-    "them all.\n\n"
+    "them all — use it to audit your own diff before stopping.\n\n"
     "AFTER writing code: if any [BLOCK] or [warn] anti-slop reminder "
     "fires (PostToolUse hook), address it before stopping. Do not "
     "justify slop with 'this is fine' — fix, mark with a "
@@ -491,6 +629,42 @@ def handle_pre_tool_use(data):
         if bash_command_is_orientation(cmd):
             return 0, None
     idx = latest_user_index(records)
+
+    # Per-citation enforcement runs FIRST. If the assistant cited a skill
+    # in this turn but never invoked it, deny — even if some OTHER skill
+    # was invoked. "Citing without loading" is the failure mode this
+    # check exists for.
+    if idx >= 0:
+        allowed = known_skills()
+        cited = cited_skills_since(records, idx, allowed)
+        if cited:
+            invoked = invoked_skills_recently(records, idx)
+            uncovered = sorted(cited - invoked)
+            if uncovered:
+                names = ", ".join(uncovered)
+                reason = (
+                    f"Skill enforcement (source: {', '.join(sources)}). "
+                    f"You cited skill(s) without invoking them: {names}. "
+                    f"Citing a skill in an applicability note claims you "
+                    f"walked its decision tables; the hook verifies that "
+                    f"by requiring a matching `Skill` invocation in the "
+                    f"recent window. Invoke each cited skill via the "
+                    f"`Skill` tool, then retry `{tool_name}`. To explicitly "
+                    f"mark a skill as not applicable, write "
+                    f"`<skill>: n/a — <one-line why>` instead. Citation "
+                    f"format: `<skill>: §<sec> — <reason>` or "
+                    f"`- **<skill>**: ...` (markdown bullet)."
+                )
+                out = {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": reason,
+                    }
+                }
+                return 0, out
+
+    # Fallback: at least one Skill invocation in the recent window.
     if idx >= 0 and skill_used_recently(records, idx):
         return 0, None
     window_hint = (
