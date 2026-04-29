@@ -48,6 +48,96 @@ def _milestone_entry_re(label):
     )
 
 
+# ── Path scoping (Layer 1) ───────────────────────────────────────────
+# The gate is only useful on production-code paths — files that
+# implement the milestone. Doc files (Technical_report.md, README,
+# milestone reports), config (mix.exs, Cargo.toml), tests, and
+# generated artefacts get edited for unrelated reasons constantly,
+# and gating those just frustrates legitimate parallel work.
+#
+# Rule: gate ONLY paths that look like impl code under a known
+# source root, with an impl extension. Allow everything else.
+
+# Paths whose RELATIVE-to-project location starts with one of these
+# components, OR whose first component is one of these (no leading
+# directory), are considered "non-impl" and pass through.
+_NON_IMPL_DIR_PREFIXES = (
+    "test/", "tests/", "spec/",
+    "docs/", "documentation/",
+    "config/",   # Elixir Mix config / framework wiring, not impl
+    "target/", "_build/", "deps/", "node_modules/",
+    "priv/static/", "priv/repo/",   # generated assets / migrations
+    ".github/", ".vscode/", ".claude/", ".git/",
+    ".elixir_ls/",
+    "examples/",   # example crates / scripts — usually not part of milestone
+)
+
+# Filenames (basename match) treated as config / scaffolding.
+_NON_IMPL_BASENAMES = {
+    "mix.exs", "mix.lock",
+    "Cargo.toml", "Cargo.lock",
+    "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+    "pyproject.toml", "Pipfile", "Pipfile.lock", "poetry.lock",
+    "go.mod", "go.sum",
+    ".gitignore", ".gitattributes",
+    ".formatter.exs",
+    "Dockerfile", "docker-compose.yml", "docker-compose.yaml",
+}
+
+# Extensions treated as non-impl (docs / config / data).
+_NON_IMPL_EXTENSIONS = {
+    ".md", ".rst", ".txt",
+    ".toml", ".yaml", ".yml", ".json",
+    ".lock",
+    ".cfg", ".ini", ".env",
+}
+
+
+def is_milestone_gated_path(file_path, project_root_path):
+    """True iff this path is production code worth gating with the
+    milestone-skill-report. Returns False for docs / config / tests /
+    generated artefacts / hidden tooling — any of which legitimately
+    get edited in parallel with milestone implementation."""
+    if not file_path or not project_root_path:
+        return False
+    try:
+        rel = str(Path(file_path).resolve().relative_to(
+            Path(project_root_path).resolve()
+        ))
+    except (ValueError, OSError):
+        # Path isn't under the project — out of scope, don't gate.
+        return False
+
+    # Filename / extension allow list
+    base = Path(rel).name
+    if base in _NON_IMPL_BASENAMES:
+        return False
+    if Path(rel).suffix.lower() in _NON_IMPL_EXTENSIONS:
+        return False
+
+    # Hidden top-level entries (`.foo`) → tooling, not impl
+    if rel.startswith("."):
+        return False
+
+    # Directory-prefix allow list
+    rel_normalized = rel.replace("\\", "/")
+    for prefix in _NON_IMPL_DIR_PREFIXES:
+        if rel_normalized.startswith(prefix):
+            return False
+        # Also catch the umbrella-app shape: apps/*/test/ and similar.
+        if "/" + prefix in "/" + rel_normalized:
+            return False
+
+    # Top-level file (no directory) that isn't config or extension-allowed:
+    # treat as scaffolding (top-level scripts, build.rs, etc.).
+    if "/" not in rel_normalized:
+        return False
+
+    # Otherwise: the path is in some directory that wasn't allow-listed.
+    # Gate it.
+    return True
+
+
 def project_root(file_path):
     """Walk up from the file until we find a project marker; return that
     directory or None."""
@@ -189,6 +279,12 @@ def handle(data):
         return None
     proj = project_root(file_path)
     if proj is None:
+        return None
+    # Path scoping (Layer 1): docs / config / tests / generated artefacts
+    # are out of the gate's scope. The gate is for production code that
+    # implements the milestone; everything else gets edited for unrelated
+    # reasons constantly and gating it just frustrates legitimate work.
+    if not is_milestone_gated_path(file_path, str(proj)):
         return None
     milestone = active_milestone(str(proj))
     if milestone is None:
