@@ -43,6 +43,7 @@ All three install into `~/.claude/` (override with `CLAUDE_HOME=/some/path`).
 │   ├── bb-stop-review-check.py          ← core: review-on-Stop reminder
 │   ├── bb-milestone-commit-check.py     ← core: M-commit guard
 │   ├── bb-milestone-skill-report.py     ← core: blocks edits until milestone_skill_report.md exists
+│   ├── bb-prompt-artifact-contract.py   ← core: blocks production-code edits until prompt-named artifacts retrieved
 │   ├── bb-post-generator-scan.py        ← core: scans new project after mix phx.new / cargo new
 │   ├── bb-post-generator-patterns.d/    ← drop-in directory
 │   │   ├── rust.json                    ← from rust-phase-skills
@@ -110,6 +111,7 @@ jq .hooks ~/.claude/settings.json
 | `bb-anti-slop-scan.py` | PostToolUse (Edit/Write/NotebookEdit) | Every file edit. Runs the union of pattern groups whose `extensions` match the path. **Per-session dedupe**: same `(check_id, file_path)` fires at most once per session — stops the "same warning hammered N times" failure mode. |
 | `bb-tdd-state-hook.py` | PostToolUse (Edit/Write/NotebookEdit) | **Default silent.** Activates when `[TDD]` appears in a recent prompt; emits a forceful full reminder on every fire. Refactor-exempt (see §1.5). |
 | `bb-milestone-skill-report.py` | PreToolUse (Edit/Write/NotebookEdit) | **Blocks** edits to project files when `PLAN.md` has an active M-milestone but `milestone_skill_report.md` lacks an entry for it. See §9. |
+| `bb-prompt-artifact-contract.py` | UserPromptSubmit + PreToolUse (Edit/Write/NotebookEdit) | UserPromptSubmit: scans the prompt for contractually-named URLs / repos / spec-file paths and emits a reminder listing them. PreToolUse: **blocks** edits to production-code paths until every contractual artifact has been retrieved (WebFetch / Bash `git clone` / Read) this session. See §1.8. |
 | `bb-post-generator-scan.py` | PostToolUse (Bash) | One-shot after `mix phx.new` / `mix igniter.new` / `cargo new` / `cargo init` / `cargo generate`. Scans the new project against the catalog under `bb-post-generator-patterns.d/`. See §1.6. |
 | `bb-rationale-marker-{rust,elixir}.py` | PostToolUse (Edit/Write/NotebookEdit) | Edits to `.rs` / `.ex` / `.exs`. Reminds about `// §§` rationale markers. |
 | `bb-no-std-build-check.py` | PostToolUse (Edit/Write/NotebookEdit) | Edits to `.rs` files in a `no_std` crate. Re-runs the build. |
@@ -255,6 +257,68 @@ cp ~/Projects/BB-skill-core/optional-triggers/third-party-skills.json \
 ```
 
 To disable, just `rm ~/.claude/hooks/bb-skill-triggers.d/third-party-skills.json`.
+
+### 1.8 Prompt-artifact-contract gate
+
+When the user's prompt names an external artifact as authoritative —
+a URL to a spec, a repo at `github.com/org/spec`, a Postman/Bruno/Hurl
+collection, an OpenAPI document — the LLM has a strong tendency to
+substitute its training-data memory of "what such artifacts usually
+look like" for the artifact's actual content. Internal tests then
+go green against the **agent's guess** of the contract while the
+real contract diverges silently. The named acceptance suite, run at
+the end as the final milestone, surfaces the divergence after the
+wrong shape has propagated through every controller and test.
+
+`bb-prompt-artifact-contract.py` closes this gap with a two-event
+hook:
+
+- **UserPromptSubmit** — scans the prompt for URLs / repos / spec-
+  shaped file names that appear in a contract-shaped context
+  ("conform", "spec", "schema", "the official suite", "must follow",
+  RFC / ECMA references, etc.). Emits a reminder listing every
+  contractual artifact found.
+- **PreToolUse (Edit/Write/NotebookEdit on production-code paths)** —
+  scans the entire user-message stream of the session, builds the
+  same artifact list, and **blocks** the write until every artifact
+  has been retrieved by an appropriate tool:
+
+  | Artifact kind | Retrieval tool |
+  |---|---|
+  | URL | `WebFetch` (the URL or any sub/parent path of it) |
+  | Repo (`github.com/org/repo` / `gh:org/repo`) | `WebFetch` of the github URL **or** `Bash` `git clone <url>` |
+  | File path (`.postman_collection.json`, `.hurl`, `.bru`) | `Read` of a path ending in that name |
+
+Path scoping reuses the same classifier as
+`bb-milestone-skill-report` — only `lib/`, `src/`, `apps/*/lib/`,
+`crates/*/src/` and similar production paths are gated. Doc /
+config / test / build edits pass through.
+
+**False-positive guards.** A bare URL with no contract-shaped tokens
+nearby is treated as illustrative and flagged silently. URLs inside
+fenced code blocks (\`\`\`...\`\`\`) are ignored — they're data being
+shown to the LLM, not contract directives. Postman/Bruno/Hurl file
+extensions are flagged regardless of context, since those are
+inherently API contracts.
+
+**Per-artifact bypass.** The gate has **no prompt-marker opt-out** by
+design — the failure mode is precisely "agent overrides instructions
+about reading the spec." The only sanctioned bypass is to put a
+human in the loop: the agent calls `AskUserQuestion` with the
+canonical prompt:
+
+> "This is likely a formal specification. Can I choose to not read it?"
+
+— naming the specific artifact in the question (or its header). If
+the user answers affirmatively (any response containing "yes" /
+"skip" / "illustrative" / "approved"), the hook treats that artifact
+as approved-to-skip for the rest of the session. A negative answer
+or no answer keeps the gate active.
+
+This makes false-positive overrides cost a real user interaction,
+which is the right calibration: genuinely contractual URLs go
+through fetch; truly illustrative URLs miscaught by the heuristic
+require one click from the user.
 
 ## 2. Install / uninstall
 
@@ -643,7 +707,8 @@ milestone marker.
 | Bash orientation allowlist | `BB-skill-core/hooks/bb-skill-enforcement.py` (`ORIENTATION_BIN_ALLOWLIST`, `ORIENTATION_GIT_SUBCMDS`) |
 | TDD marker / refactor exemptions | `BB-skill-core/hooks/bb-tdd-state-hook.py` (`TDD_MARKER`, `tdd_marker_active`, `is_refactor_of_known_name`) |
 | Anti-slop dedupe state files | `~/.claude/cache/anti-slop-seen/<session_id>.json` (per-session) |
-| Milestone-skill-report parser | `BB-skill-core/hooks/bb-milestone-skill-report.py` (`active_milestone`, `has_report_entry`) |
+| Milestone-skill-report parser | `BB-skill-core/hooks/bb-milestone-skill-report.py` (`active_milestone`, `has_report_entry`, `is_milestone_gated_path`) |
+| Prompt-artifact-contract detection / state | `BB-skill-core/hooks/bb-prompt-artifact-contract.py` (`extract_contractual_artifacts`, `artifact_was_retrieved`, `user_approved_skip`, `_is_production_code_path`) |
 | Post-generator detection / scan | `BB-skill-core/hooks/bb-post-generator-scan.py` (`GENERATORS`, `scan_project`) |
 | The settings merger's algorithm | `BB-skill-core/install/merge_settings.py` |
 | The hook event names + matcher syntax | Existing `settings-fragment.json` files in each pack |

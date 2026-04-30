@@ -8,6 +8,11 @@
             "type": "command",
             "command": "python3 $HOME/.claude/hooks/bb-skill-enforcement.py",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "python3 $HOME/.claude/hooks/bb-prompt-artifact-contract.py",
+            "timeout": 10
           }
         ]
       }
@@ -38,6 +43,11 @@
           {
             "type": "command",
             "command": "python3 $HOME/.claude/hooks/bb-milestone-skill-report.py",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "python3 $HOME/.claude/hooks/bb-prompt-artifact-contract.py",
             "timeout": 10
           }
         ]

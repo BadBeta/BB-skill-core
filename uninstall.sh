@@ -53,6 +53,7 @@ CORE_FILES=(
     bb-sweep-rationale-markers.sh
     bb-post-generator-scan.py
     bb-milestone-skill-report.py
+    bb-prompt-artifact-contract.py
 )
 
 echo "BB-skill-core uninstall"
