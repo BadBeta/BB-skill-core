@@ -135,6 +135,11 @@ INFRA_PATH_PATTERNS = [
     re.compile(r"application\.ex$"),        # OTP application supervision tree
     re.compile(r"Cargo\.toml$"),            # Rust project definition
     re.compile(r"build\.rs$"),              # Rust build script
+    # Ecto migrations are DDL scripts with a `def change/0` callback
+    # by convention. Verified by `mix ecto.migrate`, not by unit tests.
+    # Matches both single-app (priv/repo/migrations/) and umbrella
+    # (apps/*/priv/repo/migrations/) shapes.
+    re.compile(r"/priv/repo/migrations/"),
 ]
 
 # Regexes per language for "new public function signature added".
@@ -589,28 +594,15 @@ def handle(data):
     if new_names and is_refactor_of_known_name(project, new_names):
         return None
 
-    # Forceful: when [TDD] is active, every fire emits the FULL
-    # reminder. No fade — fade was the previous default-on behaviour
-    # that made later fires easy to miss. The marker gate already
-    # eliminates the false-positive class, so loud-every-time is the
-    # right tradeoff.
+    # Concise fire message: the longer multi-paragraph version was
+    # reported as too verbose for a hook that fires repeatedly during
+    # refactor-heavy work. The detailed guidance lives in the
+    # implementing skills; this hook just states the breach + action.
     return (
-        "TDD gate reminder — just wrote a new public function to "
-        f"{path} but no test file in the same project has been "
-        f"edited in the last {RECENT_TEST_WINDOW_S // 60} minutes "
-        "of this session, the file does not co-locate tests, and the "
-        "fn name is novel (not in test files, not in git log history). "
-        "If you wrote the test first and confirmed it failed, fine — "
-        "the hook is heuristic and your discipline may be ahead of this "
-        "check. If you did NOT, STOP: write the failing test now, run "
-        "it, confirm red, THEN re-edit this file. See rust-implementing "
-        "§0 / elixir-implementing §0 for the full workflow.\n\n"
-        "The ONLY valid exceptions are: HEEx/EEx templates, CSS/styling, "
-        "and one-off scripts outside lib/src/. A `def`/`pub fn` in "
-        "lib/ or src/ is production code — 'glue code' and 'thin "
-        "wrapper' are NOT valid exemptions.\n\n"
-        "To silence this gate for the current session, add `[no-TDD]` "
-        "to your next prompt."
+        f"TDD gate: new public fn in {path} — no recent test edit, "
+        "no co-located test, name is novel (no test-file mention, "
+        "no git history). Write the failing test first, run it red, "
+        "then re-edit. Bypass: `[no-TDD]` in your next prompt."
     )
 
 
